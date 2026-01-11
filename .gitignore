@@ -1,6 +1,7 @@
 *_cache/
 *_files/
 _build/
+.quarto/
 
 index.aux
 index.log
