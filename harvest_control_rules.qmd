@@ -1,0 +1,236 @@
+# Harvest Control Rules
+
+```{r packages}
+library(mse)
+library(msemodules)
+library(patchwork)
+
+data(plesim)
+```
+
+# What is a Harvest Control rule?
+
+
+- HCR is a rule that sets 'output' from 'metric'
+- Cones after est and phcr
+
+# How are HCRs defined and used in the `mse` package?
+
+- Choose a function implementing the HCR functional form you need
+- Or create your own
+- Create a *mseCtrl* object with *method* and *args*
+
+```{r, echo=TRUE, eval=FALSE}
+mseCtrl(method=hockeystick.hcr, args=list(metric="depletion", trigger=0.40,
+  limit=0.10, output="depletion"))
+```
+
+```{r icesarule, fig.margin = TRUE, fig.cap = "A"}
+plot_hockeystick.hcr(args=list(lim=0, trigger=12544, target=0.23, min=0),
+  labels=list(lim='', trigger='MSYB[trigger]', min="", target="F[target]")) +
+  xlab(expression(hat(SSB))) + ylab(expression(bar(F)))
+```
+
+# Altering the HCR shape and behaviour
+
+```{r hockeystick.hcrs, fig.width = 12, fig.height = 4, fig.fullwidth = TRUE, fig.cap = "Three examples of shapes the hockey-stick HCR can take"}
+(plot_hockeystick.hcr(args=list(lim=0.10, trigger=0.4, target=1, min=0.05)) +
+  ylab(expression(bar(F))) + xlab("")) +
+(plot_hockeystick.hcr(args=list(lim=0, trigger=0.4, target=1, min=0.05, drop=0.10)) +
+  xlab(expression(SSB/SSB[0]))) +
+(plot_hockeystick.hcr(args=list(lim=0.10, trigger=0.4, target=1, min=0.05, drop=0.20)) +
+  xlab(""))
+```
+
+# Developing your own HCR
+
+## Inputs
+
+- stk
+- ind
+- function arguments
+  - metric
+  - output
+  - points
+  - dlow, dupp
+  - initial
+- args
+- tracking
+
+## Output
+
+- list
+  - ctrl=fwdControl
+  - tracking=tracking
+
+## args
+
+- `ay` is the *advice year*, when decisions are being made.
+- `iy` is the *initial year* for simulations, that is, the first advice year.
+- `fy` is the *final year* in the simulations, as the last advice year.
+- `dy`, `dys`, `d0`, and `dyf` indicate refer to the years from which data is available: `dy` being the last data year, `dys` the ..., `d0` the, and `df` the.
+- `y0` us the bstrat of the complete OM time series.
+- `mys` are the *management year* or *years*, when decisions are to be applied.
+- `sqy` refers to the number of years in the past to be used in any *status quo* calculation.
+
+```{r timing, out.width="90%", fig.fullwidth = TRUE, fig.cap = "A"}
+knitr::include_graphics("diagrams/timing.png")
+```
+
+## Common steps in a *hcr* module
+
+- Taken from `hockeystick.hcr`
+
+### 1. Get dimensions from `args`
+
+```{r, eval=FALSE, echo=TRUE}
+spread(args[c('ay', 'iy', 'dy', 'mys', 'management_lag')])
+```
+
+### 2. Compute or extract necessary `metric(s)` over a time period
+
+The metric(s) used by the rule can either be computed from the *FLStock* arriving from the *est*imation step (`stk`) or taken from any *ind*icator that function might have already computed. The *selectMetric* function returns the selected 'metric' from either source and it is used to support the *metric* argument being defined by the user. `window()` is then used to subset for the relevant years.
+
+```{r, eval=FALSE, echo=TRUE}
+  met <- window(selectMetric(metric, stk, ind), start=dy, end=dy)
+```
+
+- Track `metric`
+
+### 3. Obtain `output` by applying rule on `metric` and `hcr` arguments
+
+```{echo=TRUE}
+$$\mathrm{output} = \left\{ 
+  \begin{array}{ c l }
+    \mathrm{min} & \quad \textrm{if } \mathrm{metric} \leq \mathrm{lim} \\
+    (\mathrm{}) & \quad \textrm{if } \mathrm{metric} \leq \mathrm{lim} \\
+    \mathrm{target} & \quad \textrm{if } \mathrm{metric} \geq \mathrm{trigger} \\
+  \end{array}
+\right.$$
+```
+
+```{echo=TRUE}
+$$\mathrm{y} = \left\{ 
+  \begin{array}{ c l }
+    m & \quad \textrm{if } x \leq l \\
+    (x - L) \cdot (\frac{T - M}{B - L} + M) & \quad \textrm{if } L \leq x < B  \\
+    T & \quad \textrm{if } x \geq b \\
+  \end{array}
+\right.$$
+
+where $y=\mathrm{output}$, $x=\mathrm{metric}$, $T=\mathrm{target}$, $L=\mathrm{limit}$, $M=\mathrm{min}$ and $B=\mathrm{trigger}$.
+```
+
+- Track `output`
+
+### 4. Get previous `output` value, if needed
+
+### 5. Apply limits to change if required
+
+- Track not limited `output`
+
+### 6. Build `fwdControl` from output over time-span of application
+
+### 7. Return `ctrl` and `tracking`
+
+## A new hcr: `threshold.hcr`
+
+```{r}
+threshold.hcr <- function(stk, ind, low_threshold, high_threshold,
+  low_target, mid_target, high_target, metric="ssb", output="fbar",
+  args, tracking, ...) {
+  
+  # Extract mse arguments
+  spread(args)
+  
+  # Compute metric
+  met <- selectMetric(metric, stk, ind, ...)
+  
+  # Subset year
+  met <- window(met, start=dy, end=dy)
+  
+  # Track metric
+  track(tracking, "met.hcr", ay) <- met
+  
+  # Apply three-zone rule
+  out <- ifelse(met < low_threshold, low_target,
+    ifelse(met < high_threshold, mid_target, high_target))
+  
+  # Track decision zone (1, 2, or 3)
+  track(tracking, "decision.hcr", ay) <- 
+    ifelse(met < low_threshold, 1,
+      ifelse(met < high_threshold, 2, 3))
+  
+  # Create fwdControl for management years
+  ctrl <- fwdControl(
+    lapply(mys, function(x) list(quant=output, value=c(out), year=x))
+  )
+  
+  # Set fbar age range if needed
+  if(output %in% c("f", "fbar")) {
+    ctrl$minAge <- range(stk, "minfbar")
+    ctrl$maxAge <- range(stk, "maxfbar")
+  }
+  
+  list(ctrl=ctrl, tracking=tracking)
+}
+```
+
+
+```{r}
+data(plesim)
+
+mp_ctrl <- mpCtrl(
+  est = mseCtrl(method=perfect.sa),
+  hcr = mseCtrl(method = threshold.hcr, args = list(
+    low_threshold = 4500, high_threshold = 14000,
+    low_target = 0.05, mid_target = 0.12, high_target = 0.18,
+    metric = "ssb", output = "fbar")))
+
+# Run MP
+run <- mp(om, oem=oem, ctrl=mp_ctrl, args=list(iy=2021, fy=2034))
+```
+
+```{r}
+plot(om, list(R=run))
+```
+
+# An example use of `hockeystick.hcr`
+
+```{r, echo=TRUE}
+arule <- mpCtrl(list(
+
+  # (est)imation method: shortcut.sa + SSB deviances
+  est = mseCtrl(method=perfect.sa),
+
+  # hcr: hockeystick (fbar ~ ssb | lim, trigger, target, min)
+  hcr = mseCtrl(method=hockeystick.hcr,
+    args=list(lim=0, trigger=14000,
+      target=0.18, min=0,
+    metric="ssb", output="fbar")),
+
+  # (i)mplementation (sys)tem: tac.is (C ~ F)
+  isys = mseCtrl(method=tac.is, args=list(recyrs=-2))
+))
+
+```
+
+```{r, echo=TRUE}
+run <- mp(om, ctrl=arule, args=list(iy=2021, fy=2032))
+```
+
+```{r}
+plot(om, run)
+```
+
+
+```{r, echo=TRUE}
+plan(multicore, workers=3)
+
+runs <- mps(om, ctrl=arule, args=list(iy=2021, fy=2032),
+  hcr=list(target=seq(0.10, 0.25, length=3)))
+```
+
+```{r}
+plot(om, runs)
+```

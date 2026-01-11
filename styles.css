@@ -1,0 +1,24 @@
+/* hide book title and tools in the sidebar
+
+.sidebar-title > a {
+  display: none;
+}
+*/
+
+/* hide just the book title in the sidebar
+.sidebar-title > a {
+  display: none;
+}
+*/
+
+/* display a border on the left sidebar */
+#quarto-sidebar {
+    border-right: 1px solid #cccccc;
+}
+
+/* display a top border on the footer
+.footer {
+    border-top: 2px solid #cccccc;
+}
+
+*/
